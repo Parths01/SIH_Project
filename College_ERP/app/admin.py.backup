@@ -1,0 +1,140 @@
+from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
+from django.utils.safestring import mark_safe
+from .models import Department, Program, Student, Guardian, Document
+
+
+@admin.register(Department)
+class DepartmentAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'head_of_department', 'is_active', 'created_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['code', 'name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(Program)
+class ProgramAdmin(admin.ModelAdmin):
+    list_display = ['code', 'name', 'department', 'degree_type', 'duration_years', 'is_active']
+    list_filter = ['department', 'degree_type', 'is_active']
+    search_fields = ['code', 'name']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+class GuardianInline(admin.TabularInline):
+    model = Guardian
+    extra = 1
+    fields = ['name', 'relationship', 'phone', 'email', 'is_emergency_contact']
+
+
+class DocumentInline(admin.TabularInline):
+    model = Document
+    extra = 0
+    readonly_fields = ['file_size', 'verified_at', 'verified_by']
+    fields = ['document_type', 'file', 'is_mandatory', 'verified_by', 'verified_at', 'verification_notes']
+
+
+@admin.register(Student)
+class StudentAdmin(admin.ModelAdmin):
+    list_display = [
+        'admission_number', 'get_full_name', 'email', 'department', 
+        'program', 'batch_year', 'current_semester', 'status', 'enrolled_date'
+    ]
+    list_filter = [
+        'status', 'department', 'program', 'batch_year', 
+        'current_semester', 'gender', 'category'
+    ]
+    search_fields = [
+        'admission_number', 'roll_number', 'first_name', 
+        'last_name', 'email', 'phone'
+    ]
+    readonly_fields = ['uuid', 'created_at', 'updated_at', 'current_academic_year', 'expected_graduation_year']
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('admission_number', 'roll_number', 'status', 'photo')
+        }),
+        ('Personal Details', {
+            'fields': (
+                ('first_name', 'middle_name', 'last_name'),
+                ('date_of_birth', 'gender', 'category'),
+                ('email', 'phone', 'alternate_phone')
+            )
+        }),
+        ('Address', {
+            'fields': (
+                ('address_line1', 'address_line2'),
+                ('city', 'state', 'pincode'),
+                'country'
+            )
+        }),
+        ('Academic Information', {
+            'fields': (
+                ('department', 'program'),
+                ('batch_year', 'current_semester'),
+                ('enrolled_date', 'graduation_date')
+            )
+        }),
+        ('System Information', {
+            'fields': ('user_account', 'uuid', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+        ('Computed Fields', {
+            'fields': ('current_academic_year', 'expected_graduation_year'),
+            'classes': ('collapse',)
+        })
+    )
+    
+    inlines = [GuardianInline, DocumentInline]
+    
+    def get_full_name(self, obj):
+        return obj.get_full_name()
+    get_full_name.short_description = 'Full Name'
+    
+    def get_photo_preview(self, obj):
+        if obj.photo:
+            return format_html('<img src="{}" style="max-height: 50px; max-width: 50px;">', obj.photo.url)
+        return "No photo"
+    get_photo_preview.short_description = 'Photo'
+    
+    actions = ['promote_to_next_semester', 'mark_as_graduated']
+    
+    def promote_to_next_semester(self, request, queryset):
+        updated = 0
+        for student in queryset:
+            if student.current_semester < student.program.total_semesters:
+                student.current_semester += 1
+                student.save()
+                updated += 1
+        self.message_user(request, f"Promoted {updated} students to next semester.")
+    promote_to_next_semester.short_description = "Promote selected students to next semester"
+    
+    def mark_as_graduated(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(
+            current_semester=models.F('program__total_semesters')
+        ).update(
+            status='graduated',
+            graduation_date=timezone.now().date()
+        )
+        self.message_user(request, f"Marked {updated} students as graduated.")
+    mark_as_graduated.short_description = "Mark selected students as graduated"
+
+
+@admin.register(Guardian)
+class GuardianAdmin(admin.ModelAdmin):
+    list_display = ['name', 'relationship', 'student', 'phone', 'is_emergency_contact']
+    list_filter = ['relationship', 'is_emergency_contact']
+    search_fields = ['name', 'student__first_name', 'student__last_name', 'phone', 'email']
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('student')
+
+
+@admin.register(Document)
+class DocumentAdmin(admin.ModelAdmin):
+    list_display = ['title', 'document_type', 'student', 'program', 'created_at']
+    list_filter = ['document_type', 'created_at', 'program']
+    search_fields = ['title', 'student__registration_number', 'student__name']
+    readonly_fields = ['created_at']
+    ordering = ['-created_at']
